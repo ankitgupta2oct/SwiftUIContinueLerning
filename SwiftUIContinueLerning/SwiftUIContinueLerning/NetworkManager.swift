@@ -1,4 +1,5 @@
 import Foundation
+import Combine
 
 class NetworkManager {
     static let shared = NetworkManager()
@@ -33,7 +34,6 @@ class NetworkManager {
             
             do {
                 let decoder = JSONDecoder()
-                decoder.keyDecodingStrategy = .convertFromSnakeCase
                 
                 let followers = try decoder.decode([Follower].self, from: data)
                 completion(followers, nil)
@@ -44,21 +44,54 @@ class NetworkManager {
         
         task.resume()
     }
+  
+  func getFollowersWithCombine(userName: String, page: UInt, cancellableCollection: inout Set<AnyCancellable>, completion: @escaping ([Follower]?, ErrorMessage?) -> Void) throws {
+      let url = baseURL + "users/\(userName)/followers?per_page=100&page=\(page)"
+      guard let url = URL(string: url) else {
+        completion(nil, .invalidURL)
+        return
+      }
+      
+      URLSession.shared.dataTaskPublisher(for: url)
+        .subscribe(on: DispatchQueue.global(qos: .background))
+        .receive(on: DispatchQueue.main)
+        .tryMap { output -> Data in
+          guard
+            let response = output.response as? HTTPURLResponse,
+            response.statusCode == 200 else {
+              throw URLError(.badServerResponse)
+          }
+          
+          return output.data
+        }
+        .decode(type: [Follower].self, decoder: JSONDecoder())
+        .sink { completion in
+          print("Completion \(completion)")
+        } receiveValue: { followes in
+          completion(followes, nil)
+        }
+        .store(in: &cancellableCollection)
+    }
 }
 
-struct Follower: Decodable {
+struct Follower: Decodable, Hashable {
     var loginId: String
     var followerURL: String
   
   enum CodingKeys: String, CodingKey {
     case login = "login"
-    case avatarUrl = "avatarUrl"
+    case avatarUrl = "avatar_url"
   }
   
   init(from decoder: any Decoder) throws {
     let container = try decoder.container(keyedBy: CodingKeys.self)
     self.loginId = try container.decode(String.self, forKey: .login)
     self.followerURL = try container.decode(String.self, forKey: .avatarUrl)
+  }
+  
+  func hash(into hasher: inout Hasher) {
+    hasher.combine(loginId)
+    hasher.combine(followerURL)
   }
 }
 
